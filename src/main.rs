@@ -30,7 +30,11 @@ type Event = (Duration, usize, TimelyEvent);
 #[derive(Abomonation, PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
 pub enum EdgeType {
     /// Operator actually doing work
-    Processing(usize),
+    Processing {
+        oid: Option<usize>,
+        send: Option<usize>,
+        recv: Option<usize>,
+    },
     /// Operator scheduled, but not doing any work
     Spinning(usize),
     /// remote control messages, e.g. about progress
@@ -68,7 +72,7 @@ pub struct PagEdge {
 
 fn main() {
     let source_peers: usize = std::env::args().nth(1).unwrap().parse().unwrap();
-    let from_file: Option<String> = if let Some(f) = std::env::args().nth(2) {
+    let from_file: bool = if let Some(f) = std::env::args().nth(2) {
         f == "f".to_string()
     } else {
         false
@@ -81,6 +85,7 @@ fn main() {
         let peers = worker.peers();
 
         worker.dataflow::<Duration, _, _>(move |scope| {
+            // @TODO: differential
             let stream: Stream<_, (Duration, WorkerIdentifier, TimelyEvent)> = readers.replay_into(scope);
 
             stream.inspect(|x| println!("{:?}", x));
@@ -111,7 +116,7 @@ fn main() {
                                 Progress(ref e) if e.source != wid || e.is_send => {
                                     output.session(&cap).give((t, wid, x));
                                 }
-                                Messages(ref e) if e.source != e.target => {
+                                Messages(ref e) => {
                                     output.session(&cap).give((t, wid, x));
                                 }
                                 _ => { /* filters out all events we don't need */ }
@@ -121,9 +126,10 @@ fn main() {
                 }
             });
 
-            let local_edges = peeled.unary_frontier(Pipeline, "Local Edges", move |_, _| {
+            let local_edges = peeled.unary(Pipeline, "Local Edges", move |_, _| {
                 let mut vector = Vec::new();
                 let mut buffer: HashMap<usize, Event> = HashMap::new();
+                let mut oids: HashMap<usize, Option<usize>> = HashMap::new();
 
                 move |input, output| {
                     input.for_each(|cap, data| {
@@ -133,7 +139,9 @@ fn main() {
                                 // we've seen an event from this local_worker before
 
                                 assert!(t >= *prev_t, format!("{:?} should happen before {:?}", prev_x, x));
-                                let edge = build_local_edge(&prev_t, &prev_wid, &prev_x, &t, &wid, &x);
+
+                                let oid = oids.entry(wid).or_insert(None);
+                                let edge = build_local_edge(&prev_t, &prev_wid, &prev_x, &t, &wid, &x, oid);
                                 output.session(&cap).give(edge);
                             }
 
@@ -146,14 +154,14 @@ fn main() {
             let sent = peeled
                 .flat_map(|(t, wid, x)| match x {
                     Progress(ref e) if e.is_send => Some(((e.source, None, e.seq_no, e.channel), (t, wid, x))),
-                    Messages(ref e) if e.is_send => Some(((e.source, Some(e.target), e.seq_no, e.channel), (t, wid, x))),
+                    Messages(ref e) if e.is_send && e.source != e.target => Some(((e.source, Some(e.target), e.seq_no, e.channel), (t, wid, x))),
                     _ => None
                 });
 
             let received = peeled
                 .flat_map(|(t, wid, x)| match x {
                     Progress(ref e) if !e.is_send => Some(((e.source, None, e.seq_no, e.channel), (t, wid, x))),
-                    Messages(ref e) if !e.is_send => Some(((e.source, Some(e.target), e.seq_no, e.channel), (t, wid, x))),
+                    Messages(ref e) if !e.is_send && e.source != e.target => Some(((e.source, Some(e.target), e.seq_no, e.channel), (t, wid, x))),
                     _ => None
                 });
 
@@ -185,7 +193,7 @@ fn make_replay_source(source_peers: usize, from_file: bool) -> ReplaySource {
         println!("Reading from {} *.dump files", source_peers);
 
         let files = (0 .. source_peers)
-            .map(|idx| format!("{}.dump", path, idx))
+            .map(|idx| format!("{}.dump", idx))
             .map(|path| Some(PathBuf::from(path)))
             .collect::<Vec<_>>();
 
@@ -202,8 +210,8 @@ fn make_replay_source(source_peers: usize, from_file: bool) -> ReplaySource {
 }
 
 
-fn build_local_edge(prev_t: &Duration, prev_wid: &usize, prev_x: &TimelyEvent, t: &Duration, wid: &usize, x: &TimelyEvent) -> PagEdge {
-    use crate::EdgeType::{Processing, Waiting, Busy};
+fn build_local_edge(prev_t: &Duration, prev_wid: &usize, prev_x: &TimelyEvent, t: &Duration, wid: &usize, x: &TimelyEvent, oid: &mut Option<usize>) -> PagEdge {
+    use crate::EdgeType::{Processing, Waiting, Busy, Spinning};
 
     let waiting_or_busy = if t.as_nanos() - prev_t.as_nanos() > 15_000 {
         Waiting
@@ -211,16 +219,29 @@ fn build_local_edge(prev_t: &Duration, prev_wid: &usize, prev_x: &TimelyEvent, t
         Busy
     };
 
-    // @TODO: lengths, complete operator_ids
     let edge_type = match (prev_x, x) {
-        (Schedule(p), Schedule(r)) if p.start_stop == StartStop::Start && r.start_stop == StartStop::Stop => Processing(p.id),
-        (Schedule(p), Schedule(r)) if p.start_stop == StartStop::Stop && r.start_stop == StartStop::Start => waiting_or_busy,
+        (Schedule(p), Schedule(r)) if p.start_stop == StartStop::Start && r.start_stop == StartStop::Stop => Spinning(p.id),
+        (Schedule(p), _) if p.start_stop == StartStop::Start => {
+            *oid = Some(p.id);
+            Processing { oid: *oid, send: None, recv: None }
+        },
+        (Schedule(p), _) if p.start_stop == StartStop::Stop => waiting_or_busy,
         (Progress(_), _) => waiting_or_busy,
-        (_, Progress(_)) => waiting_or_busy,
-        (Messages(_), _) => Processing(0),
-        (_, Messages(_)) => Processing(0),
+        (Messages(p), Schedule(r)) if p.is_send && r.start_stop == StartStop::Start => {
+            *oid = Some(r.id);
+            Processing { oid: *oid, send: Some(p.length), recv: None }
+        }
+        (Messages(p), _) if p.is_send => Processing { oid: *oid, send: Some(p.length), recv: None },
+        (Messages(p), _) if !p.is_send => Processing { oid: *oid, send: None, recv: Some(p.length) },
         _ => panic!("{:?}, {:?}", prev_x, x)
     };
+
+    // Reset oid if scheduling ended.
+    if let Schedule(r) = x {
+        if r.start_stop == StartStop::Stop {
+            *oid = None;
+        }
+    }
 
     PagEdge {
         src: PagNode { t: *prev_t, wid: *prev_wid },
