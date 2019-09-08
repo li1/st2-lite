@@ -100,7 +100,6 @@
         (data pag-data)
         (join "text")
         (style "font-size" 12)
-        (attr "opacity" (if (.. js/document (getElementById "showlabel") -checked) 1 0))
         (attr "x" #(- (x-scale (/ (+ (dur->ns (.. % -src -t)) (dur->ns (.. % -dst -t))) 2)) 30))
         (attr "y" #(- (y-scale (/ (+ (.. % -src -wid) (.. % -dst -wid)) 2)) 10))
         (attr "fill" #(get colors (type-name (.-edge_type %))))
@@ -110,6 +109,15 @@
   (let [new-x-scale (.. js/d3 -event -transform (rescaleX x-scale))]
     (.call x-axis-svg (.scale x-axis new-x-scale))
     (redraw-pag pag-svg pag-data new-x-scale y-scale)))
+
+(defn mount-show-labels [pag-svg pag-data]
+  (let [checkbox (.. js/document (getElementById "showlabel"))]
+    (.addEventListener checkbox "change"
+                       #(this-as this
+                         (.. pag-svg
+                             (selectAll "text")
+                             (data pag-data)
+                             (attr "opacity" (if (.-checked this) 1 0)))))))
 
 (defn mount-d3 [pag-data]
   (let [width (js/parseInt (.. js/d3 (select "#pag") (style "width")))
@@ -125,6 +133,7 @@
         pag-svg (.. svg (append "g"))]
     (.call svg (.. js/d3 (zoom) (on "zoom" #(zoomed x-axis-svg x-axis x-scale y-scale pag-svg pag-data))))
     (redraw-pag pag-svg pag-data x-scale y-scale)
+    (mount-show-labels pag-svg pag-data)
     (.log js/console pag-data)))
 
 (mount-d3 (.parse js/JSON data/json2))
