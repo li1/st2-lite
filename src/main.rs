@@ -29,9 +29,10 @@ fn main() {
 
         worker.dataflow::<Duration, _, _>(move |scope| {
             // @TODO: differential
-            let stream = readers.replay_into(scope);
+            // @TODO: Most operators don't clean up for bounded computations,
+            //        resulting in small errors at the very end of the dataflow.
 
-            // stream.inspect(|x| println!("{:?}", x));
+            let stream = readers.replay_into(scope);
 
             let peeled = stream.peel();
 

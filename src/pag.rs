@@ -136,10 +136,14 @@ fn build_local_edge(prev: &Event, curr: &Event, next: &Event, oid: &mut Option<u
 
     let (prev_t, prev_wid, prev_x) = prev;
     let (t, wid, x) = curr;
-    let (_next_t, _next_wid, next_x) = next;
+    let (_next_t, next_wid, next_x) = next;
+    assert!(*prev_wid == *wid && *wid == *next_wid);
 
     let mut edge_type = match (prev_x, x) {
-        (_, Progress(r)) if !r.is_send => Waiting,
+        (_, Progress(r)) if !r.is_send => {
+            assert!(r.source != *wid);
+            Waiting
+        },
         (Schedule(p), Schedule(r)) if p.start_stop == StartStop::Start && r.start_stop == StartStop::Stop => Spinning(p.id),
         (Schedule(p), _) if p.start_stop == StartStop::Start => {
             *oid = Some(p.id);
@@ -157,8 +161,10 @@ fn build_local_edge(prev: &Event, curr: &Event, next: &Event, oid: &mut Option<u
 
     // waiting on data message
     if edge_type == Busy {
-        if let (Schedule(_), Messages(_)) = (x, next_x) {
-            edge_type = Waiting;
+        if let (Schedule(_), Messages(m)) = (x, next_x) {
+            if m.source != m.target {
+                edge_type = Waiting;
+            }
         }
     }
 
@@ -187,19 +193,21 @@ impl<S: Scope> TrimPag<S> for Stream<S, PagEdge> {
 
         self.unary(Pipeline, "Trim", move |_, _| {
             let mut vector = Vec::new();
-            let mut first_edge: Option<PagEdge> = None;
+            let mut first_edge: HashMap<usize, PagEdge> = HashMap::new();
 
             move |input, output| {
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
 
-                    for edge in vector.drain(..) {
-                        if first_edge.is_some() {
-                            let mut first = std::mem::replace(&mut first_edge, None).expect("no first edge?");
-
-                            if edge.edge_type == Busy {
+                    for mut edge in vector.drain(..) {
+                        let wid = edge.src.wid;
+                        if let Some(mut first) = first_edge.remove(&wid) {
+                            if edge.edge_type == Busy && first.edge_type != Waiting {
                                 first.dst = edge.dst;
-                                first_edge = Some(first);
+                                first_edge.insert(wid, first);
+                            } else if first.edge_type == Busy {
+                                edge.src = first.src;
+                                first_edge.insert(wid, edge);
                             } else if edge.edge_type == first.edge_type {
                                 first.dst = edge.dst;
 
@@ -230,13 +238,13 @@ impl<S: Scope> TrimPag<S> for Stream<S, PagEdge> {
                                     _ => unreachable!()
                                 };
 
-                                first_edge = Some(first);
+                                first_edge.insert(wid, first);
                             } else {
                                 output.session(&cap).give(first);
-                                first_edge = Some(edge);
+                                first_edge.insert(wid, edge);
                             }
                         } else {
-                            first_edge = Some(edge);
+                            first_edge.insert(wid, edge);
                         }
                     }
                 })

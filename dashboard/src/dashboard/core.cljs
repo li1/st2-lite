@@ -20,6 +20,12 @@
        (map #(dur->ns (get-in % ["dst" "t"])))
        (reduce #(if (> %1 %2) %1 %2))))
 
+(defn max-worker [pag-data]
+  (->> pag-data
+       (js->clj)
+       (map #(get-in % ["src" "wid"]))
+       (reduce #(if (> %1 %2) %1 %2))))
+
 ;; (defn filter-pag [pag-data [from to]]
 ;;   (->> pag-data
 ;;        (js->clj)
@@ -33,14 +39,36 @@
       (attr "width" (- width 20))
       (attr "height" height)))
 
-(defn stroke-colors [type]
-  (let [k (if (string? type) type
-              (first (keys type)))]
-    (get {"Waiting"    "#FF0000"
-          "Progress"   "#4b5f53"
-          "Spinning"   "#e48282"
-          "Processing" "#0b6623"
-          "Data"       "#971757"} k)))
+(def colors {"Waiting"    "#f44336"
+             "Progress"   "#0277bd"
+             "Spinning"   "#b0bec5"
+             "Processing" "#00c853"
+             "Busy"       "#000"
+             "Data"       "#8e24aa"})
+
+(defn mount-marker [defs color]
+  (.. defs (append "marker")
+      (attr "id" (first color))
+      (attr "viewBox" "0 0 10 10")
+      (attr "refX" 6)
+      (attr "refY" 5)
+      (attr "markerUnits" "strokeWidth")
+      (attr "markerWidth" 4)
+      (attr "markerHeight" 4)
+      (attr "orient" "auto")
+      (append "path")
+      (attr "d" "M 0 0 L 10 5 L 0 10 z")
+      (attr "fill" (second color))))
+
+(defn mount-markers [svg]
+  (let [defs (.. svg (append "defs"))
+        markers (run! (partial mount-marker defs) colors)]
+    defs))
+
+(defn type-name [type]
+  (let [type (js->clj type)]
+    (if (string? type) type
+        (first (keys type)))))
 
 (defn proc-title [p]
   (str " (o" (get p "oid") ", " (+ (get p "send") (get p "recv")) ")"))
@@ -52,45 +80,51 @@
       (let [name (first (keys type))]
         (case name
           "Processing" (str name (proc-title (get type name)))
+          "Spinning"   (str name " (o" (get type name) ")")
           (str name " (" (get type name) ")"))))))
 
-(defn redraw-pag [pag-svg pag-data scale]
+(defn redraw-pag [pag-svg pag-data x-scale y-scale]
   (.. pag-svg
-      (attr "transform" "translate(0, 40)")
       (selectAll "line")
       (data pag-data)
       (join "line")
       (attr "stroke-width" 2)
-      (attr "stroke" #(stroke-colors (js->clj (.-edge_type %))))
+      (attr "stroke" #(get colors (type-name (.-edge_type %))))
       (attr "stroke-dasharray" #(if (= (.. % -src -wid) (.. % -dst -wid)) "5,0" "5,5"))
-      (attr "x1" #(scale (dur->ns (.. % -src -t))))
-      (attr "x2" #(scale (dur->ns (.. % -dst -t))))
-      (attr "y1" #(+ 50 (* 50 (.. % -src -wid))))
-      (attr "y2" #(+ 50 (* 50 (.. % -dst -wid)))))
-  (.. pag-svg (selectAll "text")
-      (data pag-data)
-      (join "text")
-      (style "font-size" 12)
-      (attr "x" #(scale (- (/ (+ (dur->ns (.. % -src -t)) (dur->ns (.. % -dst -t))) 2) 20)))
-      (attr "y" #(- (* 50 (/ (+ (inc (.. % -src -wid)) (inc (.. % -dst -wid))) 2)) 10))
-      (attr "fill" #(stroke-colors (js->clj (.-edge_type %))))
-      (text gen-title)))
+      (attr "marker-end" #(str "url(#" (type-name (.-edge_type %)) ")"))
+      (attr "x1" #(x-scale (dur->ns (.. % -src -t))))
+      (attr "x2" #(x-scale (dur->ns (.. % -dst -t))))
+      (attr "y1" #(y-scale (.. % -src -wid)))
+      (attr "y2" #(y-scale (.. % -dst -wid))))
+    (.. pag-svg (selectAll "text")
+        (data pag-data)
+        (join "text")
+        (style "font-size" 12)
+        (attr "opacity" (if (.. js/document (getElementById "showlabel") -checked) 1 0))
+        (attr "x" #(- (x-scale (/ (+ (dur->ns (.. % -src -t)) (dur->ns (.. % -dst -t))) 2)) 30))
+        (attr "y" #(- (y-scale (/ (+ (.. % -src -wid) (.. % -dst -wid)) 2)) 10))
+        (attr "fill" #(get colors (type-name (.-edge_type %))))
+        (text gen-title)))
 
-(defn zoomed [x-axis-svg x-axis x-scale pag-svg pag-data]
+(defn zoomed [x-axis-svg x-axis x-scale y-scale pag-svg pag-data]
   (let [new-x-scale (.. js/d3 -event -transform (rescaleX x-scale))]
     (.call x-axis-svg (.scale x-axis new-x-scale))
-    (redraw-pag pag-svg pag-data new-x-scale)))
+    (redraw-pag pag-svg pag-data new-x-scale y-scale)))
 
 (defn mount-d3 [pag-data]
   (let [width (js/parseInt (.. js/d3 (select "#pag") (style "width")))
-        height 600
+        height (+ 80 (* 120 (max-worker pag-data)))
         svg (mount-svg width height)
-        x-scale (.. js/d3 (scaleLinear) (domain #js [(pag-min pag-data) (pag-max pag-data)]) (range #js [0 (- width 20)]))
+        marker (mount-markers svg)
+        x-scale (.. js/d3 (scaleLinear) (domain #js [(pag-min pag-data) (pag-max pag-data)]) (range #js [80 (- width 20)]))
         x-axis (.. js/d3 (axisBottom x-scale))
         x-axis-svg (.. svg (append "g") (call x-axis))
+        y-scale (.. js/d3 (scaleLinear) (domain #js [0 (max-worker pag-data)]) (range #js [80 (- height 20)]))
+        y-axis (.. js/d3 (axisLeft y-scale) (ticks 1))
+        y-axis-svg (.. svg (append "g") (attr "transform" "translate(40, 0)") (call y-axis))
         pag-svg (.. svg (append "g"))]
-    (.call svg (.. js/d3 (zoom) (on "zoom" #(zoomed x-axis-svg x-axis x-scale pag-svg pag-data))))
-    (redraw-pag pag-svg pag-data x-scale)
+    (.call svg (.. js/d3 (zoom) (on "zoom" #(zoomed x-axis-svg x-axis x-scale y-scale pag-svg pag-data))))
+    (redraw-pag pag-svg pag-data x-scale y-scale)
     (.log js/console pag-data)))
 
-(mount-d3 (.parse js/JSON data/json))
+(mount-d3 (.parse js/JSON data/json2))
