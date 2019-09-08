@@ -3,11 +3,13 @@ use timely::logging::TimelyEvent;
 
 use serde::{Serialize, Deserialize};
 
+use crate::EdgeType::{Processing, Spinning, Progress, Data, Waiting, Busy};
+
 /// event type as provided by Timely backend
 pub type Event = (Duration, usize, TimelyEvent);
 
 /// The various types of activity that can happen in a dataflow.
-#[derive(PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EdgeType {
     /// Operator actually doing work
     Processing {
@@ -28,6 +30,21 @@ pub enum EdgeType {
     /// e.g. in-between a ScheduleEnd and consecutive ScheduleStart.
     /// In particular, operator doesn't depend on external input.
     Busy
+}
+
+impl PartialEq for EdgeType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Processing { oid: oid1, .. },
+             Processing { oid: oid2, .. }) => oid1 == oid2,
+            (Spinning(x), Spinning(y)) => x == y,
+            (Progress, Progress) => true,
+            (Data(_), Data(_)) => true,
+            (Waiting, Waiting) => true,
+            (Busy, Busy) => true,
+            _ => false
+        }
+    }
 }
 
 /// A node in the PAG

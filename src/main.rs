@@ -11,6 +11,7 @@ use timely::dataflow::operators::concat::Concat;
 
 mod pag;
 use crate::pag::Pag;
+use crate::pag::TrimPag;
 
 fn main() {
     let source_peers: usize = std::env::args().nth(1).unwrap().parse().unwrap();
@@ -30,19 +31,16 @@ fn main() {
             // @TODO: differential
             let stream = readers.replay_into(scope);
 
-            stream.inspect(|x| println!("{:?}", x));
+            // stream.inspect(|x| println!("{:?}", x));
 
             let peeled = stream.peel();
 
-            let local_edges = peeled.local_edges();
+            let local_edges = peeled.local_edges().trim_local();
             let remote_edges = peeled.remote_edges();
 
             let pag = local_edges.concat(&remote_edges);
 
-            pag.inspect(|x| println!("{}", serde_json::to_string(x).unwrap()));
-
-            TODO: for writing out pag, combine adjacent identical local edges
-                (e.g. connected waiting activities, processing, ...)
+            pag.inspect(|x| println!("{},", serde_json::to_string(x).unwrap()));
         });
     }).unwrap();
 }

@@ -177,6 +177,75 @@ fn build_local_edge(prev: &Event, curr: &Event, next: &Event, oid: &mut Option<u
 }
 
 
+pub trait TrimPag<S: Scope> {
+    fn trim_local(&self) -> Stream<S, PagEdge>;
+}
+
+impl<S: Scope> TrimPag<S> for Stream<S, PagEdge> {
+    fn trim_local(&self) -> Stream<S, PagEdge> {
+        use st2::EdgeType::{Processing, Waiting, Busy, Spinning, Data, Progress};
+
+        self.unary(Pipeline, "Trim", move |_, _| {
+            let mut vector = Vec::new();
+            let mut first_edge: Option<PagEdge> = None;
+
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    data.swap(&mut vector);
+
+                    for edge in vector.drain(..) {
+                        if first_edge.is_some() {
+                            let mut first = std::mem::replace(&mut first_edge, None).expect("no first edge?");
+
+                            if edge.edge_type == Busy {
+                                first.dst = edge.dst;
+                                first_edge = Some(first);
+                            } else if edge.edge_type == first.edge_type {
+                                first.dst = edge.dst;
+
+                                first.edge_type = match (first.edge_type, edge.edge_type) {
+                                    (Processing { send: f_send, recv: f_recv, oid},
+                                     Processing { send: e_send, recv: e_recv, ..}) => {
+                                        let send = match (f_send, e_send) {
+                                            (None, None) => None,
+                                            (Some(x), None) => Some(x),
+                                            (None, Some(x)) => Some(x),
+                                            (Some(x), Some(y)) => Some(x + y)
+                                        };
+
+                                        let recv = match (f_recv, e_recv) {
+                                            (None, None) => None,
+                                            (Some(x), None) => Some(x),
+                                            (None, Some(x)) => Some(x),
+                                            (Some(x), Some(y)) => Some(x + y)
+                                        };
+
+                                        Processing { oid: oid, send, recv }
+                                    }
+                                    (Spinning(f), Spinning(_)) => Spinning(f),
+                                    (Progress, Progress) => Progress,
+                                    (Data(f), Data(e)) => Data(f + e),
+                                    (Waiting, Waiting) => Waiting,
+                                    (Busy, Busy) => Busy,
+                                    _ => unreachable!()
+                                };
+
+                                first_edge = Some(first);
+                            } else {
+                                output.session(&cap).give(first);
+                                first_edge = Some(edge);
+                            }
+                        } else {
+                            first_edge = Some(edge);
+                        }
+                    }
+                })
+            }
+        })
+    }
+}
+
+
 trait JoinEdges<S: Scope, D> where D: Data + Hash + Eq + Send + Sync + Serialize + for<'a>Deserialize<'a> {
     fn join_edges(&self, other: &Stream<S, (D, Event)>) -> Stream<S, (Event, Event)>;
 }
