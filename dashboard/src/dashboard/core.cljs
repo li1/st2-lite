@@ -110,6 +110,19 @@
     (.call x-axis-svg (.scale x-axis new-x-scale))
     (redraw-pag pag-svg pag-data new-x-scale y-scale)))
 
+(defn mount-filter-pag [pag-svg pag-data]
+  (let [from          (.. js/document (getElementById "from"))
+        to            (.. js/document (getElementById "to"))
+        range-changed #(this-as this
+                         (let [from      (.. from -value)
+                               to        (.. to -value)
+                               ;; @TODO: request new pag-data from backend
+                               pag-data' nil]
+                           ;; (redraw-pag pag-svg pag-data new-x-scale y-scale)
+                           ))]
+    (.addEventListener from "blur" range-changed)
+    (.addEventListener to "blur" range-changed)))
+
 (defn mount-show-labels [pag-svg pag-data]
   (let [checkbox (.. js/document (getElementById "showlabel"))]
     (.addEventListener checkbox "change"
@@ -133,6 +146,7 @@
         pag-svg (.. svg (append "g"))]
     (.call svg (.. js/d3 (zoom) (on "zoom" #(zoomed x-axis-svg x-axis x-scale y-scale pag-svg pag-data))))
     (redraw-pag pag-svg pag-data x-scale y-scale)
+    (mount-filter-pag pag-svg pag-data)
     (mount-show-labels pag-svg pag-data)
     (.log js/console pag-data)))
 

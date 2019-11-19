@@ -1,3 +1,7 @@
+//! PAG Construction from a Timely Log Event Stream
+
+#![deny(missing_docs)]
+
 use timely::dataflow::operators::map::Map;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::channels::pact::Pipeline;
@@ -14,9 +18,13 @@ use std::hash::Hash;
 use serde::{Serialize, Deserialize};
 
 
+/// Trait subsuming the steps to construct the PAG
 pub trait Pag<S: Scope> {
+    /// Peel outer scopes
     fn peel(&self) -> Stream<S, Event>;
+    /// Create local edges
     fn local_edges(&self) -> Stream<S, PagEdge>;
+    /// Create remote edges
     fn remote_edges(&self) -> Stream<S, PagEdge>;
 }
 
@@ -59,6 +67,13 @@ impl<S: Scope> Pag<S> for Stream<S, Event> {
         })
     }
 
+    /// A "stateful map" operator that finds neighboring local events and
+    /// creates a local PAG edge from them.
+    /// We need to keep track of two events while looking at a third:
+    /// `prev2` and `prev` are joined together to form an edge.
+    /// We also need to peek at the next event: Data messages that cause
+    /// waiting activities are received only after prev2 and prev have
+    /// already occurred. If we wouldn't peek, we'd miss this causality.
     fn local_edges(&self) -> Stream<S, PagEdge> {
         self.unary(Pipeline, "Local Edges", move |_, _| {
             let mut vector = Vec::new();
@@ -98,6 +113,7 @@ impl<S: Scope> Pag<S> for Stream<S, Event> {
         })
     }
 
+    /// Uses a Timely join to create remote edges from log events.
     fn remote_edges(&self) -> Stream<S, PagEdge> {
         let sent = self
             .flat_map(|(t, wid, x)| match x {
@@ -131,6 +147,8 @@ impl<S: Scope> Pag<S> for Stream<S, Event> {
     }
 }
 
+/// Builds a local edge from prev and curr, peeking at next to determine whether
+/// the edge is a waiting activity.
 fn build_local_edge(prev: &Event, curr: &Event, next: &Event, oid: &mut Option<usize>) -> PagEdge {
     use EdgeType::{Processing, Waiting, Busy, Spinning};
 
@@ -183,6 +201,12 @@ fn build_local_edge(prev: &Event, curr: &Event, next: &Event, oid: &mut Option<u
 }
 
 
+/// "Trims" local edges. Often, a single edge (e.g. processing at an operator)
+/// is cut into multiple smaller edges during the PAG construction, since edge
+/// ends are inserted e.g. if a remote activity occurs during processing:
+/// `--processing(2)-->[SEND-EVENT]--processing(2) cont'd--->[REAL-END]`
+/// This operator merges these edges back together, s.t. it is easier to interpret.
+/// Trimming is optional --- the PAG is correct even without it.
 pub trait TrimPag<S: Scope> {
     fn trim_local(&self) -> Stream<S, PagEdge>;
 }
@@ -254,7 +278,9 @@ impl<S: Scope> TrimPag<S> for Stream<S, PagEdge> {
 }
 
 
+/// Naive Timely join operator specialized for joining log events together
 trait JoinEdges<S: Scope, D> where D: Data + Hash + Eq + Send + Sync + Serialize + for<'a>Deserialize<'a> {
+    /// Naive Timely join operator specialized for joining log events together
     fn join_edges(&self, other: &Stream<S, (D, Event)>) -> Stream<S, (Event, Event)>;
 }
 

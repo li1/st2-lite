@@ -1,3 +1,9 @@
+//! A minimal implementation of SnailTrail 2.
+//! Constructs a fixed-window PAG and works with Timely / DD out of the box.
+//! The PAG can be visualized using the dashboard cljs frontend.
+
+#![deny(missing_docs)]
+
 use std::time::Duration;
 use timely::logging::TimelyEvent;
 
@@ -13,8 +19,11 @@ pub type Event = (Duration, usize, TimelyEvent);
 pub enum EdgeType {
     /// Operator actually doing work
     Processing {
+        /// operator ID
         oid: Option<usize>,
+        /// #messages sent
         send: Option<usize>,
+        /// #messages received
         recv: Option<usize>,
     },
     /// Operator scheduled, but not doing any work

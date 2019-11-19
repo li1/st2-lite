@@ -42,6 +42,9 @@ fn main() {
             let pag = local_edges.concat(&remote_edges);
 
             pag.inspect(|x| println!("{},", serde_json::to_string(x).unwrap()));
+
+            // TODO: PAG viz via socket
+            // TODO: feature parity
         });
     }).unwrap();
 }
