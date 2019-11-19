@@ -41,3 +41,4 @@ Con:
 - Dashboard only visualizes PAG, doesn't contain further analyses
 - No CLI
 - **@TODO**: Dashboard isn't connected to `st2` backend. Currently, a PAG has to be written to data.cljs for analysis.
+- **@TODO**: Dashboard's PAG time range filter doesn't work yet.
