@@ -1,10 +1,8 @@
-# dashboard.core
+# Dashboard
 
-FIXME: Write a one-line description of your library/project.
+Provides a D3.js PAG viz frontend to st2 lite.
 
-## Overview
-
-FIXME: Write a paragraph about the library/project and highlight its goals.
+To run it, [Clojure](https://clojure.org) needs to be installed.
 
 ## Development
 
@@ -28,10 +26,3 @@ To create a production build run:
 
 	rm -rf target/public
 	clojure -A:fig:min
-
-
-## License
-
-Copyright © 2018 FIXME
-
-Distributed under the Eclipse Public License either version 1.0 or (at your option) any later version.
