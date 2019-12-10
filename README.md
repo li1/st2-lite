@@ -4,7 +4,7 @@ A minimal implementation of SnailTrail 2.
 Constructs a fixed-window PAG and works with Timely / DD out of the box.
 The PAG can be visualized using the `dashboard`, a cljs+D3.js frontend.
 
-st2 lite is not meant to be a complete "analysis app". For that, try out [SnailTrail 2](https://github.com/li1/snailtrail).
+st2 lite is not meant to be an end-to-end online analysis solution. For that, try out [SnailTrail 2](https://github.com/li1/snailtrail).
 
 ## Running
 
